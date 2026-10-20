@@ -1,6 +1,6 @@
 // Central API & Socket config
 // In production, connects directly to the live Railway backend
-const LIVE_BACKEND_URL = 'https://swalef-2s1-production.up.railway.app';
+const LIVE_BACKEND_URL = 'https://swalef-2s1-production-fdc0.up.railway.app';
 
 const getApiUrl = () => {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;

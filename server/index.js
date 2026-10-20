@@ -46,6 +46,20 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+app.get('/', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="ar" dir="rtl">
+    <head><meta charset="UTF-8"><title>سيرفر سوالف 🎭</title></head>
+    <body style="font-family: sans-serif; text-align: center; padding: 60px 20px; background: #064e3b; color: white;">
+      <h1 style="color: #4ade80; font-size: 2.2rem;">🎭 سيرفر سوالف متصل ويعمل بنجاح!</h1>
+      <p style="color: #d1fae5; font-size: 1.1rem; margin-top: 10px;">خادم اللعبة وقاعدة البيانات جاهزان لاستقبال اللاعبين.</p>
+      <a href="https://swalef-2s1.netlify.app" style="display: inline-block; margin-top: 25px; padding: 14px 28px; background: #22c55e; color: white; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 1.1rem; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">الذهاب إلى اللعبة على Netlify 🎮</a>
+    </body>
+    </html>
+  `);
+});
+
 // =====================
 // AUTH ROUTES
 // =====================
