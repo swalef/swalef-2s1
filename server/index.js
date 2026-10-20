@@ -8,15 +8,18 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('./database');
 const { getRandomWord, getCategories } = require('./words');
 
+const path = require('path');
+const fs = require('fs');
+
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
-  : ['http://localhost:5173', 'http://localhost:5174', 'http://127.0.0.1:5173'];
+  : true;
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: allowedOrigins === true ? (origin, callback) => callback(null, true) : allowedOrigins,
     methods: ['GET', 'POST'],
     credentials: true
   }
@@ -619,6 +622,22 @@ function resolveVotes(roomId, session, allPlayers) {
     const roomData = getRoomData(roomId);
     if (roomData) io.to(roomId).emit('room_reset', roomData);
   }, 30000);
+}
+
+// Serve static client files if built
+const clientDist1 = path.join(__dirname, '../client/dist');
+const clientDist2 = path.join(__dirname, 'client/dist');
+const clientDist = fs.existsSync(clientDist1) ? clientDist1 : (fs.existsSync(clientDist2) ? clientDist2 : null);
+
+if (clientDist) {
+  console.log(`📁 Serving client static files from: ${clientDist}`);
+  app.use(express.static(clientDist));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
+      return next();
+    }
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
 }
 
 server.listen(PORT, () => {
