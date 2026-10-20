@@ -34,6 +34,11 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
 // =====================
 // AUTH ROUTES
 // =====================
@@ -632,14 +637,15 @@ const clientDist = fs.existsSync(clientDist1) ? clientDist1 : (fs.existsSync(cli
 if (clientDist) {
   console.log(`📁 Serving client static files from: ${clientDist}`);
   app.use(express.static(clientDist));
-  app.get('*', (req, res, next) => {
-    if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
-      return next();
+  // Express 5 compatible SPA fallback
+  app.use((req, res, next) => {
+    if (req.method === 'GET' && !req.path.startsWith('/api') && !req.path.startsWith('/socket.io')) {
+      return res.sendFile(path.join(clientDist, 'index.html'));
     }
-    res.sendFile(path.join(clientDist, 'index.html'));
+    next();
   });
 }
 
-server.listen(PORT, () => {
-  console.log(`🎮 Swalef Server running on http://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`🎮 Swalef Server running on http://0.0.0.0:${PORT}`);
 });
