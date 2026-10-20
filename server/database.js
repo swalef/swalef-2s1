@@ -13,8 +13,15 @@ try {
   console.log(`⚠️ Database directory not writable, falling back to: ${dbPath}`);
 }
 
-console.log(`📦 Initializing SQLite database at: ${dbPath}`);
-const db = new Database(dbPath);
+let db;
+try {
+  db = new Database(dbPath);
+  console.log(`📦 SQLite database ready at: ${dbPath}`);
+} catch (err) {
+  console.warn(`⚠️ Failed to open file ${dbPath}, falling back to in-memory SQLite:`, err.message);
+  db = new Database(':memory:');
+  console.log('📦 In-memory SQLite database ready');
+}
 
 // Create tables
 db.exec(`
