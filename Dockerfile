@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt
 
 # Install server dependencies
 COPY server/package*.json ./server/
-RUN cd server && npm install --production
+RUN cd server && npm install
 
 # Copy server code
 COPY server/ ./server/
@@ -26,9 +26,6 @@ COPY server/ ./server/
 # Copy built frontend assets to client/dist
 COPY --from=client-builder /app/client/dist ./client/dist
 
-ENV PORT=3001
 ENV NODE_ENV=production
-
-EXPOSE 3001
 
 CMD ["node", "server/index.js"]

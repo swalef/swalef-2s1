@@ -4,8 +4,7 @@
   "description": "Swalef - Bra Elsalfah Multiplayer Game",
   "main": "server/index.js",
   "scripts": {
-    "postinstall": "cd client && npm install && npm run build",
-    "build": "cd client && npm install && npm run build",
+    "build": "cd client && npm install && npm run build && cd ../server && npm install",
     "start": "node server/index.js"
   },
   "dependencies": {
