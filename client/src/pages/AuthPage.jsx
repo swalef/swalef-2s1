@@ -26,7 +26,9 @@ export default function AuthPage() {
         toast('تم إنشاء حسابك بنجاح! 🎉', 'success');
       }
     } catch (err) {
-      toast(err.response?.data?.error || 'حدث خطأ، حاول مرة أخرى', 'error');
+      console.error('Auth error:', err);
+      const msg = err.response?.data?.error || (err.message === 'Network Error' ? 'فشل الاتصال بسيرفر اللعبة، يرجى تحديث الصفحة بالكامل' : (err.message || 'حدث خطأ، حاول مجدداً'));
+      toast(msg, 'error');
     } finally {
       setLoading(false);
     }
