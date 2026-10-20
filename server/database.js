@@ -1,10 +1,20 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 
-const db = new Database(path.join(__dirname, 'game.db'));
+let dbPath = process.env.DB_PATH || path.join(__dirname, 'game.db');
+try {
+  const testFile = path.join(__dirname, '.test_write');
+  fs.writeFileSync(testFile, 'ok');
+  fs.unlinkSync(testFile);
+} catch (e) {
+  dbPath = path.join(os.tmpdir(), 'game.db');
+  console.log(`⚠️ Database directory not writable, falling back to: ${dbPath}`);
+}
 
-// Enable WAL mode for better concurrent performance
-db.pragma('journal_mode = WAL');
+console.log(`📦 Initializing SQLite database at: ${dbPath}`);
+const db = new Database(dbPath);
 
 // Create tables
 db.exec(`

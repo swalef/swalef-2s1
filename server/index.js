@@ -76,7 +76,7 @@ app.post('/api/auth/register', async (req, res) => {
     res.json({ token, user: { id, email, username, avatarColor } });
   } catch (err) {
     console.error('Register error:', err);
-    res.status(500).json({ error: 'خطأ في الخادم' });
+    res.status(500).json({ error: 'خطأ في الخادم: ' + (err.message || 'حاول مرة أخرى') });
   }
 });
 
@@ -98,7 +98,7 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({ token, user: { id: user.id, email: user.email, username: user.username, avatarColor: user.avatar_color } });
   } catch (err) {
     console.error('Login error:', err);
-    res.status(500).json({ error: 'خطأ في الخادم' });
+    res.status(500).json({ error: 'خطأ في الخادم: ' + (err.message || 'حاول مرة أخرى') });
   }
 });
 
