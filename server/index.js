@@ -418,26 +418,101 @@ io.on('connection', (socket) => {
     }
   });
 
-  // ---- PLAYER TURN: choose who to ask ----
+  // ---- PLAYER TURN: Asker chooses who to ask ----
   socket.on('select_target', ({ targetId }, callback) => {
     try {
       const roomId = socket.currentRoom;
-      if (!roomId) return;
+      if (!roomId) return callback?.({ error: 'لست في غرفة' });
 
-      const session = db.prepare('SELECT * FROM game_sessions WHERE room_id = ? AND ended_at IS NULL').get(roomId);
-      if (!session || session.current_turn_user_id !== socket.user.id) {
-        return callback?.({ error: 'ليس دورك' });
+      const state = activeRooms.get(roomId);
+      if (!state || !state.askersOrder) {
+        return callback?.({ error: 'لا توجد جولة نشطة' });
       }
 
-      db.prepare('UPDATE game_sessions SET current_turn_user_id = ? WHERE id = ?').run(targetId, session.id);
-      io.to(roomId).emit('turn_changed', { currentTurn: targetId, askedBy: socket.user.id });
+      const currentAsker = state.askersOrder[state.currentAskerIndex];
+      if (currentAsker !== socket.user.id) {
+        return callback?.({ error: 'ليس دورك في طرح السؤال' });
+      }
+
+      if (targetId === socket.user.id) {
+        return callback?.({ error: 'لا يمكنك سؤال نفسك' });
+      }
+
+      state.currentAnswererId = targetId;
+
+      io.to(roomId).emit('dialog_started', {
+        askerId: currentAsker,
+        answererId: targetId
+      });
+
       callback?.({ success: true });
     } catch (err) {
+      console.error('Select target error:', err);
+      callback?.({ error: 'خطأ في توجيه السؤال' });
+    }
+  });
+
+  // ---- FINISH QUESTION: move to next asker or voting ----
+  socket.on('finish_question', (callback) => {
+    try {
+      const roomId = socket.currentRoom;
+      if (!roomId) return callback?.({ error: 'لست في غرفة' });
+
+      const state = activeRooms.get(roomId);
+      if (!state || !state.askersOrder) {
+        return callback?.({ error: 'لا توجد جولة نشطة' });
+      }
+
+      const currentAsker = state.askersOrder[state.currentAskerIndex];
+      const room = db.prepare('SELECT host_id FROM rooms WHERE id = ?').get(roomId);
+
+      // Either asker, answerer, or host can conclude the question
+      const isAllowed = socket.user.id === currentAsker ||
+                        socket.user.id === state.currentAnswererId ||
+                        socket.user.id === room?.host_id;
+
+      if (!isAllowed) {
+        return callback?.({ error: 'فقط السائل أو المجيب يمكنه إنهاء السؤال' });
+      }
+
+      const prevAsker = currentAsker;
+      const prevAnswerer = state.currentAnswererId;
+      state.currentAnswererId = null;
+      state.currentAskerIndex++;
+
+      io.to(roomId).emit('question_done', {
+        askerId: prevAsker,
+        answererId: prevAnswerer
+      });
+
+      // Check if all players have completed their question turn
+      if (state.currentAskerIndex >= state.askersOrder.length) {
+        const session = db.prepare('SELECT * FROM game_sessions WHERE room_id = ? AND ended_at IS NULL').get(roomId);
+        if (session) {
+          db.prepare('UPDATE game_sessions SET phase = ? WHERE id = ?').run('voting', session.id);
+          db.prepare('DELETE FROM votes WHERE session_id = ?').run(session.id);
+          io.to(roomId).emit('voting_started', {
+            sessionId: session.id,
+            round: state.round || 1
+          });
+        }
+      } else {
+        const nextAsker = state.askersOrder[state.currentAskerIndex];
+        io.to(roomId).emit('turn_changed', {
+          currentAsker: nextAsker,
+          askerIndex: state.currentAskerIndex,
+          totalAskers: state.askersOrder.length
+        });
+      }
+
+      callback?.({ success: true });
+    } catch (err) {
+      console.error('Finish question error:', err);
       callback?.({ error: 'خطأ' });
     }
   });
 
-  // ---- REQUEST VOTING ----
+  // ---- REQUEST VOTING (Host skip) ----
   socket.on('request_vote', (callback) => {
     try {
       const roomId = socket.currentRoom;
@@ -449,36 +524,36 @@ io.on('connection', (socket) => {
       const session = db.prepare('SELECT * FROM game_sessions WHERE room_id = ? AND ended_at IS NULL').get(roomId);
       if (!session) return;
 
+      const state = activeRooms.get(roomId);
       db.prepare('UPDATE game_sessions SET phase = ? WHERE id = ?').run('voting', session.id);
-      // Clear votes for this session
       db.prepare('DELETE FROM votes WHERE session_id = ?').run(session.id);
 
-      io.to(roomId).emit('voting_started', { sessionId: session.id });
+      io.to(roomId).emit('voting_started', { sessionId: session.id, round: state?.round || 1 });
       callback?.({ success: true });
     } catch (err) {
       callback?.({ error: 'خطأ' });
     }
   });
 
-  // ---- NEXT TURN ----
-  socket.on('end_my_turn', (callback) => {
-    try {
-      const roomId = socket.currentRoom;
-      if (!roomId) return;
+  // ---- WEBRTC NATIVE AUDIO SIGNALING ----
+  socket.on('webrtc_join', () => {
+    const roomId = socket.currentRoom;
+    if (!roomId) return;
+    // Broadcast to others in the room that this socket is ready for WebRTC audio
+    socket.to(roomId).emit('webrtc_peer_joined', {
+      socketId: socket.id,
+      userId: socket.user.id,
+      username: socket.user.username
+    });
+  });
 
-      const session = db.prepare('SELECT * FROM game_sessions WHERE room_id = ? AND ended_at IS NULL').get(roomId);
-      if (!session || session.current_turn_user_id !== socket.user.id) {
-        return callback?.({ error: 'ليس دورك' });
-      }
-
-      // Next turn goes back to previous asker to choose next person
-      // Actually, after someone answers, the questioner picks the next target
-      // Let's emit that the answer is done
-      io.to(roomId).emit('answer_done', { answererId: socket.user.id });
-      callback?.({ success: true });
-    } catch (err) {
-      callback?.({ error: 'خطأ' });
-    }
+  socket.on('webrtc_signal', ({ targetSocketId, signal }) => {
+    if (!targetSocketId) return;
+    io.to(targetSocketId).emit('webrtc_signal', {
+      senderSocketId: socket.id,
+      userId: socket.user.id,
+      signal
+    });
   });
 
   // ---- RESET GAME / NEW ROUND ----
@@ -616,26 +691,39 @@ function checkAndStartWaitingTimer(roomId, playerCount) {
 
 function startGame(roomId, room, players) {
   try {
-    const state = activeRooms.get(roomId);
-    if (state?.waitingTimer) {
+    const state = activeRooms.get(roomId) || {};
+    if (state.waitingTimer) {
       clearTimeout(state.waitingTimer);
-      if (state) state.waitingTimer = null;
+      state.waitingTimer = null;
     }
 
     db.prepare('UPDATE rooms SET status = ?, started_at = CURRENT_TIMESTAMP WHERE id = ?').run('playing', roomId);
 
-    // Select impostors (1 for 4-6 players, 2 for 7+ players)
     const playerList = players.map(p => p.user_id);
     const numImpostors = playerList.length >= 7 ? 2 : 1;
-    const shuffled = [...playerList].sort(() => Math.random() - 0.5);
-    const impostors = shuffled.slice(0, numImpostors);
+    const shuffledImpostors = [...playerList].sort(() => Math.random() - 0.5);
+    const impostors = shuffledImpostors.slice(0, numImpostors);
 
     const word = getRandomWord(room.category);
     const sessionId = uuidv4();
-    const firstTurn = playerList[Math.floor(Math.random() * playerList.length)];
+
+    // Determine asking order: everyone gets exactly one turn to ask
+    const askersOrder = [...playerList].sort(() => Math.random() - 0.5);
+    const firstAsker = askersOrder[0];
 
     db.prepare('INSERT INTO game_sessions (id, room_id, word, impostor_ids, current_turn_user_id) VALUES (?, ?, ?, ?, ?)')
-      .run(sessionId, roomId, word, JSON.stringify(impostors), firstTurn);
+      .run(sessionId, roomId, word, JSON.stringify(impostors), firstAsker);
+
+    activeRooms.set(roomId, {
+      ...state,
+      askersOrder,
+      currentAskerIndex: 0,
+      currentAnswererId: null,
+      round: 1,
+      maxRounds: 3,
+      impostors,
+      word
+    });
 
     // Notify each player individually about their role
     const sockets = io.sockets.adapter.rooms.get(roomId);
@@ -649,7 +737,9 @@ function startGame(roomId, room, players) {
             word: isImpostor ? null : word,
             role: isImpostor ? 'impostor' : 'citizen',
             impostorCount: numImpostors,
-            currentTurn: firstTurn,
+            currentAsker: firstAsker,
+            askersOrder,
+            round: 1,
             category: room.category
           });
         }
@@ -670,22 +760,67 @@ function resolveVotes(roomId, session, allPlayers) {
   const topVoted = votes[0].voted_for_id;
   const impostors = JSON.parse(session.impostor_ids);
   const isImpostorEliminated = impostors.includes(topVoted);
-
-  const winner = isImpostorEliminated ? 'citizens' : 'impostors';
-  db.prepare('UPDATE game_sessions SET ended_at = CURRENT_TIMESTAMP, winner = ?, phase = ? WHERE id = ?')
-    .run(winner, 'ended', session.id);
-  db.prepare('UPDATE rooms SET status = ? WHERE id = ?').run('ended', roomId);
+  const state = activeRooms.get(roomId) || {};
 
   const eliminatedUser = db.prepare('SELECT username, avatar_color FROM users WHERE id = ?').get(topVoted);
   const impostorUsers = impostors.map(id => db.prepare('SELECT username, avatar_color FROM users WHERE id = ?').get(id));
 
-  io.to(roomId).emit('game_ended', {
-    winner,
-    eliminatedPlayer: { id: topVoted, ...eliminatedUser },
-    impostors: impostorUsers,
-    word: session.word,
-    wasImpostor: isImpostorEliminated
-  });
+  if (isImpostorEliminated) {
+    // Impostor discovered! Citizens WIN!
+    const winner = 'citizens';
+    db.prepare('UPDATE game_sessions SET ended_at = CURRENT_TIMESTAMP, winner = ?, phase = ? WHERE id = ?')
+      .run(winner, 'ended', session.id);
+    db.prepare('UPDATE rooms SET status = ? WHERE id = ?').run('ended', roomId);
+
+    io.to(roomId).emit('game_ended', {
+      winner,
+      eliminatedPlayer: { id: topVoted, ...eliminatedUser },
+      impostors: impostorUsers,
+      word: session.word,
+      wasImpostor: true,
+      message: 'تم كشف المتسلل (برا السالفة)! فاز المواطنون'
+    });
+  } else {
+    // Innocent citizen voted out or tie! Continue to next round!
+    const nextRound = (state.round || 1) + 1;
+
+    if (nextRound > 3) {
+      // Impostor survived all 3 rounds! Impostor WINS!
+      const winner = 'impostors';
+      db.prepare('UPDATE game_sessions SET ended_at = CURRENT_TIMESTAMP, winner = ?, phase = ? WHERE id = ?')
+        .run(winner, 'ended', session.id);
+      db.prepare('UPDATE rooms SET status = ? WHERE id = ?').run('ended', roomId);
+
+      io.to(roomId).emit('game_ended', {
+        winner,
+        eliminatedPlayer: { id: topVoted, ...eliminatedUser },
+        impostors: impostorUsers,
+        word: session.word,
+        wasImpostor: false,
+        message: 'نجح المتسلل في الإفلات طوال الجولات الثلاث! فاز المتسلل'
+      });
+    } else {
+      // Advance to next round!
+      state.round = nextRound;
+      const remainingPlayers = allPlayers.map(p => p.user_id);
+      state.askersOrder = [...remainingPlayers].sort(() => Math.random() - 0.5);
+      state.currentAskerIndex = 0;
+      state.currentAnswererId = null;
+
+      db.prepare('UPDATE game_sessions SET round = ?, phase = ? WHERE id = ?').run(nextRound, 'discussion', session.id);
+      db.prepare('DELETE FROM votes WHERE session_id = ?').run(session.id);
+
+      io.to(roomId).emit('round_advanced', {
+        round: nextRound,
+        eliminatedPlayer: { id: topVoted, ...eliminatedUser },
+        wasImpostor: false,
+        currentAsker: state.askersOrder[0],
+        askersOrder: state.askersOrder,
+        message: `${eliminatedUser?.username || 'اللاعب'} كان داخل السالفة وبريئاً! تبدأ الجولة ${nextRound}`
+      });
+    }
+  }
+}
 
   // Reset room after 30 seconds
   setTimeout(() => {

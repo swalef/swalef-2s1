@@ -330,6 +330,17 @@ class PureStatement {
       return { changes: s ? 1 : 0 };
     }
 
+    // UPDATE game_sessions round, phase
+    if (/UPDATE game_sessions SET round = \?, phase = \? WHERE id = \?/i.test(sql)) {
+      const s = data.game_sessions.find(x => x.id === params[2]);
+      if (s) {
+        s.round = params[0];
+        s.phase = params[1];
+      }
+      saveData();
+      return { changes: s ? 1 : 0 };
+    }
+
     // UPDATE game_sessions ended_at, winner, phase
     if (/UPDATE game_sessions SET ended_at.*winner.*phase/i.test(sql)) {
       const s = data.game_sessions.find(x => x.id === params[2]);
