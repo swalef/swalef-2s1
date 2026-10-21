@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useAuth } from './contexts/AuthContext';
-import { useSocket } from './contexts/SocketContext';
 import AuthPage from './pages/AuthPage';
 import HomePage from './pages/HomePage';
 import WaitingRoom from './pages/WaitingRoom';
@@ -20,20 +19,12 @@ export default function App() {
         flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: '20px',
+        gap: '16px',
+        background: 'var(--bg-base)'
       }}>
-        <div style={{
-          width: '80px', height: '80px',
-          borderRadius: '50%',
-          background: 'linear-gradient(135deg, #22c55e, #16a34a)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '40px',
-          animation: 'pulse-glow 2s infinite',
-        }}>
-          🎭
-        </div>
-        <div className="spinner spinner-lg" />
-        <p style={{ color: 'var(--text-dim)', fontSize: '16px' }}>جاري التحميل...</p>
+        <h1 style={{ fontSize: '24px', fontWeight: '800', letterSpacing: '-0.5px' }}>سوالف</h1>
+        <div className="spinner" />
+        <p style={{ color: 'var(--text-dim)', fontSize: '13px' }}>جاري التحميل...</p>
       </div>
     );
   }
@@ -59,6 +50,12 @@ export default function App() {
     setScreen('home');
   };
 
+  const handleRoomReset = (updatedRoom) => {
+    setCurrentRoom(updatedRoom);
+    setGameData(null);
+    setScreen('waiting');
+  };
+
   if (screen === 'waiting' && currentRoom) {
     return (
       <WaitingRoom
@@ -75,6 +72,7 @@ export default function App() {
         gameData={gameData}
         room={currentRoom}
         onGameEnd={handleLeave}
+        onRoomReset={handleRoomReset}
         onLeave={handleLeave}
       />
     );

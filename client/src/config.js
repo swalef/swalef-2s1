@@ -1,21 +1,21 @@
-// Central API & Socket config
-// In production, connects directly to the live Railway backend
-const LIVE_BACKEND_URL = 'https://swalef-2s1-production-fdc0.up.railway.app';
+// Unified API & Socket config for Swalef
+// Automatically adapts to local development (Vite port 5173) and unified production deployment
+
+const isViteDev = () => {
+  if (typeof window === 'undefined') return false;
+  return window.location.port === '5173';
+};
 
 const getApiUrl = () => {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
-  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    return `${LIVE_BACKEND_URL}/api`;
-  }
-  return 'http://localhost:3001/api';
+  if (isViteDev()) return 'http://localhost:3001/api';
+  return '/api';
 };
 
 const getSocketUrl = () => {
   if (import.meta.env.VITE_SOCKET_URL) return import.meta.env.VITE_SOCKET_URL;
-  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    return LIVE_BACKEND_URL;
-  }
-  return 'http://localhost:3001';
+  if (isViteDev()) return 'http://localhost:3001';
+  return typeof window !== 'undefined' ? window.location.origin : '';
 };
 
 const API_URL = getApiUrl();

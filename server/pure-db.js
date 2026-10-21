@@ -222,7 +222,7 @@ class PureStatement {
         is_public: is_public ?? 1,
         status: 'waiting',
         max_players: max_players || 10,
-        min_players: 4,
+        min_players: 3,
         category: category || 'عام',
         created_at: new Date().toISOString(),
         started_at: null

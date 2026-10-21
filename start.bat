@@ -1,29 +1,27 @@
 @echo off
-title 🎭 سوالف - لعبة برا السالفة
-color 0A
+title سوالف - لعبة برا السالفة
 echo.
-echo  ==========================================
-echo   🎭  سوالف - لعبة برا السالفة
-echo  ==========================================
+echo ==========================================
+echo  سوالف - خادم اللعبة الموحد
+echo ==========================================
 echo.
 
-echo [1/2] تشغيل السيرفر (المنفذ 3001)...
-start "🎮 Swalef Server" cmd /k "cd /d %~dp0server && node index.js"
+echo [1/2] بناء الواجهة المحدثة...
+call npm --prefix client run build
+
+echo.
+echo [2/2] تشغيل الخادم الموحد على المنفذ 3001...
+start "Swalef Server" cmd /k "cd /d %~dp0 && node server/index.js"
 
 timeout /t 2 /nobreak >nul
 
-echo [2/2] تشغيل الواجهة (المنفذ 5173)...
-start "🎨 Swalef Client" cmd /k "cd /d %~dp0client && npm run dev"
-
-timeout /t 3 /nobreak >nul
-
 echo.
-echo  ==========================================
-echo   ✅  اللعبة شغالة!
-echo   🌐  افتح المتصفح على: http://localhost:5173
-echo  ==========================================
+echo ==========================================
+echo  تم تشغيل اللعبة بنجاح
+echo  الرابط المحلي: http://localhost:3001
+echo ==========================================
 echo.
 
-start "" "http://localhost:5173"
+start "" "http://localhost:3001"
 
 pause

@@ -46,19 +46,7 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-app.get('/', (req, res) => {
-  res.send(`
-    <!DOCTYPE html>
-    <html lang="ar" dir="rtl">
-    <head><meta charset="UTF-8"><title>سيرفر سوالف 🎭</title></head>
-    <body style="font-family: sans-serif; text-align: center; padding: 60px 20px; background: #064e3b; color: white;">
-      <h1 style="color: #4ade80; font-size: 2.2rem;">🎭 سيرفر سوالف متصل ويعمل بنجاح!</h1>
-      <p style="color: #d1fae5; font-size: 1.1rem; margin-top: 10px;">خادم اللعبة وقاعدة البيانات جاهزان لاستقبال اللاعبين.</p>
-      <a href="https://swalef-2s1.netlify.app" style="display: inline-block; margin-top: 25px; padding: 14px 28px; background: #22c55e; color: white; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 1.1rem; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">الذهاب إلى اللعبة على Netlify 🎮</a>
-    </body>
-    </html>
-  `);
-});
+
 
 // =====================
 // AUTH ROUTES
@@ -359,8 +347,9 @@ io.on('connection', (socket) => {
       if (room.host_id !== socket.user.id) return callback?.({ error: 'فقط مضيف الغرفة يمكنه البدء' });
 
       const players = db.prepare('SELECT user_id FROM room_players WHERE room_id = ?').all(roomId);
-      if (players.length < room.min_players) {
-        return callback?.({ error: `يجب أن يكون هناك ${room.min_players} لاعبين على الأقل` });
+      const minRequired = Math.min(room.min_players || 3, 2);
+      if (players.length < minRequired) {
+        return callback?.({ error: `يجب أن يكون هناك لاعبان على الأقل لبدء اللعبة` });
       }
 
       startGame(roomId, room, players);
@@ -486,6 +475,31 @@ io.on('connection', (socket) => {
     }
   });
 
+  // ---- RESET GAME / NEW ROUND ----
+  socket.on('reset_game', (callback) => {
+    try {
+      const roomId = socket.currentRoom;
+      if (!roomId) return callback?.({ error: 'لست في غرفة' });
+
+      const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId);
+      if (!room) return callback?.({ error: 'الغرفة غير موجودة' });
+      if (room.host_id !== socket.user.id) return callback?.({ error: 'فقط المضيف يمكنه بدء جولة جديدة' });
+
+      db.prepare('UPDATE rooms SET status = ? WHERE id = ?').run('waiting', roomId);
+      const session = db.prepare('SELECT id FROM game_sessions WHERE room_id = ? AND ended_at IS NULL').get(roomId);
+      if (session) {
+        db.prepare('UPDATE game_sessions SET ended_at = CURRENT_TIMESTAMP, phase = ? WHERE id = ?').run('ended', session.id);
+        db.prepare('DELETE FROM votes WHERE session_id = ?').run(session.id);
+      }
+      const roomData = getRoomData(roomId);
+      if (roomData) io.to(roomId).emit('room_reset', roomData);
+      callback?.({ success: true });
+    } catch (err) {
+      console.error('Reset game error:', err);
+      callback?.({ error: 'فشل إعادة ضبط الغرفة' });
+    }
+  });
+
   // ---- AGORA TOKEN (simplified - no token for dev) ----
   socket.on('get_agora_token', ({ channelName }, callback) => {
     // In production, generate Agora token. For dev, return null (no token mode)
@@ -508,38 +522,64 @@ function leaveCurrentRoom(socket) {
   if (!roomId) return;
 
   socket.leave(roomId);
-  const userId = socket.user.id;
+  const userId = socket.user?.id;
+  if (!userId) return;
 
   const room = db.prepare('SELECT * FROM rooms WHERE id = ?').get(roomId);
   if (!room) return;
 
   db.prepare('DELETE FROM room_players WHERE room_id = ? AND user_id = ?').run(roomId, userId);
 
-  // If host left and game hasn't started, transfer host or delete room
-  if (room.host_id === userId && room.status === 'waiting') {
-    const remaining = db.prepare('SELECT user_id FROM room_players WHERE room_id = ? ORDER BY joined_at ASC').all(roomId);
-    if (remaining.length === 0) {
-      // Delete child records first (FK constraint order)
-      db.prepare('DELETE FROM chat_messages WHERE room_id = ?').run(roomId);
-      db.prepare('DELETE FROM votes WHERE session_id IN (SELECT id FROM game_sessions WHERE room_id = ?)').run(roomId);
-      db.prepare('DELETE FROM game_sessions WHERE room_id = ?').run(roomId);
-      db.prepare('DELETE FROM room_players WHERE room_id = ?').run(roomId);
-      db.prepare('DELETE FROM rooms WHERE id = ?').run(roomId);
-      const state = activeRooms.get(roomId);
-      if (state?.waitingTimer) clearTimeout(state.waitingTimer);
-      activeRooms.delete(roomId);
-      return;
+  const remaining = db.prepare('SELECT user_id FROM room_players WHERE room_id = ? ORDER BY joined_at ASC').all(roomId);
+
+  if (remaining.length === 0) {
+    db.prepare('DELETE FROM chat_messages WHERE room_id = ?').run(roomId);
+    db.prepare('DELETE FROM votes WHERE session_id IN (SELECT id FROM game_sessions WHERE room_id = ?)').run(roomId);
+    db.prepare('DELETE FROM game_sessions WHERE room_id = ?').run(roomId);
+    db.prepare('DELETE FROM room_players WHERE room_id = ?').run(roomId);
+    db.prepare('DELETE FROM rooms WHERE id = ?').run(roomId);
+    const state = activeRooms.get(roomId);
+    if (state?.waitingTimer) clearTimeout(state.waitingTimer);
+    activeRooms.delete(roomId);
+    socket.currentRoom = null;
+    return;
+  }
+
+  // Transfer host if host left
+  if (room.host_id === userId) {
+    const newHostId = remaining[0].user_id;
+    db.prepare('UPDATE rooms SET host_id = ? WHERE id = ?').run(newHostId, roomId);
+    io.to(roomId).emit('host_changed', { newHostId });
+  }
+
+  // Handle active game if playing
+  if (room.status === 'playing') {
+    if (remaining.length < 2) {
+      db.prepare('UPDATE rooms SET status = ? WHERE id = ?').run('waiting', roomId);
+      db.prepare('UPDATE game_sessions SET ended_at = CURRENT_TIMESTAMP, phase = ? WHERE room_id = ? AND ended_at IS NULL').run('ended', roomId);
+      io.to(roomId).emit('game_cancelled', { message: 'تم إنهاء الجولة لعدم توفر عدد كافٍ من اللاعبين' });
     } else {
-      const newHostId = remaining[0].user_id;
-      db.prepare('UPDATE rooms SET host_id = ? WHERE id = ?').run(newHostId, roomId);
-      io.to(roomId).emit('host_changed', { newHostId });
+      const session = db.prepare('SELECT * FROM game_sessions WHERE room_id = ? AND ended_at IS NULL').get(roomId);
+      if (session) {
+        if (session.current_turn_user_id === userId) {
+          const nextTurnUserId = remaining[0].user_id;
+          db.prepare('UPDATE game_sessions SET current_turn_user_id = ? WHERE id = ?').run(nextTurnUserId, session.id);
+          io.to(roomId).emit('turn_changed', { currentTurn: nextTurnUserId, askedBy: null });
+        }
+        if (session.phase === 'voting') {
+          const votes = db.prepare('SELECT * FROM votes WHERE session_id = ?').all(session.id);
+          if (votes.length >= remaining.length) {
+            resolveVotes(roomId, session, remaining);
+          }
+        }
+      }
     }
   }
 
   const roomData = getRoomData(roomId);
   if (roomData) {
     io.to(roomId).emit('room_updated', roomData);
-    io.to(roomId).emit('player_left', { username: socket.user.username });
+    io.to(roomId).emit('player_left', { username: socket.user?.username });
   }
   socket.currentRoom = null;
 }
@@ -651,12 +691,16 @@ function resolveVotes(roomId, session, allPlayers) {
 }
 
 // Serve static client files if built
-const clientDist1 = path.join(__dirname, '../client/dist');
-const clientDist2 = path.join(__dirname, 'client/dist');
-const clientDist = fs.existsSync(clientDist1) ? clientDist1 : (fs.existsSync(clientDist2) ? clientDist2 : null);
+const candidateDistDirs = [
+  path.join(__dirname, '../client/dist'),
+  path.join(__dirname, 'client/dist'),
+  path.join(process.cwd(), 'client/dist'),
+  path.join(process.cwd(), 'dist')
+];
+const clientDist = candidateDistDirs.find(d => fs.existsSync(d) && fs.existsSync(path.join(d, 'index.html')));
 
 if (clientDist) {
-  console.log(`📁 Serving client static files from: ${clientDist}`);
+  console.log(`Serving client static files from: ${clientDist}`);
   app.use(express.static(clientDist));
   // Express 5 compatible SPA fallback
   app.use((req, res, next) => {
@@ -665,8 +709,12 @@ if (clientDist) {
     }
     next();
   });
+} else {
+  app.get('/', (req, res) => {
+    res.json({ status: 'ok', server: 'swalef', message: 'Ready. Build client with npm run build' });
+  });
 }
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🎮 Swalef Server running on http://0.0.0.0:${PORT}`);
+  console.log(`Swalef server running on http://0.0.0.0:${PORT}`);
 });

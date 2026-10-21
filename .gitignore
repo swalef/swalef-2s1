@@ -4,4 +4,7 @@ node_modules/
 *.db-wal
 *.db-shm
 dist/
+client/dist/
 .DS_Store
+swalef_data.json
+server/swalef_data.json

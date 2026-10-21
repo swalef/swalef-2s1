@@ -1,28 +1,34 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useSocket } from '../contexts/SocketContext';
 import { useToast } from '../contexts/ToastContext';
 import AgoraRTC from 'agora-rtc-sdk-ng';
+import {
+  IconMic,
+  IconMicOff,
+  IconLogout,
+  IconSend,
+  IconVote,
+  IconCrown,
+  IconCheck,
+  IconPlay
+} from '../components/Icons';
 
-// ──────────────────────────────────────────────
-// Agora config – replace with your App ID
-// ──────────────────────────────────────────────
-const AGORA_APP_ID = 'YOUR_AGORA_APP_ID';  // ← put your Agora App ID here
+// Agora App ID (leave empty or set via VITE_AGORA_APP_ID)
+const AGORA_APP_ID = import.meta.env.VITE_AGORA_APP_ID || '';
 
 const QUICK_CHATS = [
-  'أنا بريء! 😇',
-  'هو المتسلل! 🫵',
-  'متأكد 100%! 💯',
-  'ما أعرف وش أقول 😅',
-  'كلامه مشبوه! 🤔',
-  'ثقوا فيني! 🤝',
-  'نصوت عليه! ✋',
-  'خلونا نكمل 🎮',
-  'كذبت علينا! 🤥',
-  'أنا نفس الكلمة! ✅',
+  'أنا بريء تماماً',
+  'هو المتسلل بالتأكيد',
+  'كلامه مشبوه جداً',
+  'ما أعرف وش أقول',
+  'ثقوا فيني',
+  'نصوت عليه الآن',
+  'كلامك غير مقنع',
+  'أنا نفس الكلمة معكم',
 ];
 
-export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
+export default function GameRoom({ gameData, room, onGameEnd, onRoomReset, onLeave }) {
   const { user } = useAuth();
   const { socket } = useSocket();
   const toast = useToast();
@@ -59,49 +65,63 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
   const isHost = room.host_id === user.id;
   const isImpostor = gameData.role === 'impostor';
 
-  // ── Scroll chat ──
+  // Scroll chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
 
-  // ── Socket events ──
+  // Socket events
   useEffect(() => {
     if (!socket) return;
 
     const onRoomUpdated = (r) => setPlayers(r.players || []);
+
     const onTurnChanged = ({ currentTurn: ct, askedBy: ab }) => {
       setCurrentTurn(ct);
       setAskedBy(ab);
       setSelectingTarget(false);
       const ctPlayer = players.find(p => p.id === ct);
       if (ct !== user.id) {
-        addSystemMessage(`🎙️ دور ${ctPlayer?.username || 'لاعب'} للإجابة`);
+        addSystemMessage(`دور ${ctPlayer?.username || 'لاعب'} للإجابة`);
       }
     };
+
     const onAnswerDone = ({ answererId }) => {
       const p = players.find(x => x.id === answererId);
-      addSystemMessage(`✅ ${p?.username || 'لاعب'} انتهى من الإجابة`);
+      addSystemMessage(`${p?.username || 'لاعب'} أنهى إجابته`);
       setAskedBy(null);
     };
+
     const onVotingStarted = () => {
       setPhase('voting');
-      addSystemMessage('🗳️ بدأ التصويت! صوّت على من تعتقد أنه المتسلل');
-      toast('بدأ التصويت! 🗳️', 'info');
+      addSystemMessage('بدأت مرحلة التصويت: اختر اللاعب الذي تعتقد أنه المتسلل');
+      toast('بدأت مرحلة التصويت', 'info');
     };
+
     const onVoteUpdate = ({ votes: v }) => {
       const map = {};
       v.forEach(vote => { map[vote.voterId] = vote.targetId; });
       setVotes(map);
     };
+
     const onGameEnded = (result) => {
       setPhase('ended');
       setGameResult(result);
     };
+
+    const onGameCancelled = ({ message }) => {
+      toast(message || 'تم إيقاف اللعبة', 'error');
+      setTimeout(() => onLeave(), 2500);
+    };
+
     const onChatMessage = (msg) => {
       setChatMessages(prev => [...prev, msg]);
     };
-    const onRoomReset = (r) => {
-      toast('اللعبة انتهت! يمكنك العودة للبيت.', 'info');
+
+    const handleRoomResetEvent = (updatedRoom) => {
+      toast('تمت إعادة ضبط الغرفة لجولة جديدة', 'info');
+      if (onRoomReset) onRoomReset(updatedRoom);
+      else onLeave();
     };
 
     socket.on('room_updated', onRoomUpdated);
@@ -110,8 +130,9 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
     socket.on('voting_started', onVotingStarted);
     socket.on('vote_update', onVoteUpdate);
     socket.on('game_ended', onGameEnded);
+    socket.on('game_cancelled', onGameCancelled);
     socket.on('chat_message', onChatMessage);
-    socket.on('room_reset', onRoomReset);
+    socket.on('room_reset', handleRoomResetEvent);
 
     return () => {
       socket.off('room_updated', onRoomUpdated);
@@ -120,14 +141,15 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
       socket.off('voting_started', onVotingStarted);
       socket.off('vote_update', onVoteUpdate);
       socket.off('game_ended', onGameEnded);
+      socket.off('game_cancelled', onGameCancelled);
       socket.off('chat_message', onChatMessage);
-      socket.off('room_reset', onRoomReset);
+      socket.off('room_reset', handleRoomResetEvent);
     };
-  }, [socket, user, players, toast]);
+  }, [socket, user, players, onLeave, onRoomReset, toast]);
 
-  // ── Agora Voice ──
+  // Agora Voice Initialization
   useEffect(() => {
-    if (AGORA_APP_ID === 'YOUR_AGORA_APP_ID') {
+    if (!AGORA_APP_ID || AGORA_APP_ID === 'YOUR_AGORA_APP_ID') {
       setVoiceError('no_app_id');
       return;
     }
@@ -135,7 +157,6 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
     const client = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
     agoraClient.current = client;
 
-    // Remote user events
     client.on('user-published', async (remoteUser, mediaType) => {
       await client.subscribe(remoteUser, mediaType);
       if (mediaType === 'audio') {
@@ -143,6 +164,7 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
         setRemoteUsers(prev => ({ ...prev, [remoteUser.uid]: remoteUser }));
       }
     });
+
     client.on('user-unpublished', (remoteUser) => {
       setRemoteUsers(prev => {
         const next = { ...prev };
@@ -150,6 +172,7 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
         return next;
       });
     });
+
     client.on('user-left', (remoteUser) => {
       setRemoteUsers(prev => {
         const next = { ...prev };
@@ -161,14 +184,12 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
     const joinVoice = async () => {
       try {
         const channelName = `swalef_${room.id.replace(/-/g, '')}`;
-        const uid = await client.join(AGORA_APP_ID, channelName, null, null);
+        await client.join(AGORA_APP_ID, channelName, null, null);
         const audioTrack = await AgoraRTC.createMicrophoneAudioTrack();
         localAudioTrack.current = audioTrack;
         await client.publish(audioTrack);
         setAgoraJoined(true);
-        toast('🎙️ انضممت للصوت!', 'success');
 
-        // Volume indicator
         volumeInterval.current = setInterval(() => {
           const level = audioTrack.getVolumeLevel?.() || 0;
           setSpeakingUsers(prev => {
@@ -179,25 +200,25 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
           });
         }, 300);
       } catch (err) {
-        console.error('Agora join error:', err);
-        setVoiceError(err.message);
-        toast('فشل الاتصال بالصوت: ' + err.message, 'error');
+        console.error('Agora error:', err);
+        setVoiceError(err.message || 'error');
       }
     };
 
     joinVoice();
 
     return () => {
-      clearInterval(volumeInterval.current);
+      if (volumeInterval.current) clearInterval(volumeInterval.current);
       localAudioTrack.current?.close();
       client.leave().catch(() => {});
     };
-  }, []);
+  }, [room.id, user.id]);
 
   const addSystemMessage = (text) => {
     setChatMessages(prev => [...prev, {
       id: Date.now() + Math.random(),
-      type: 'system', message: text,
+      type: 'system',
+      message: text,
       timestamp: new Date().toISOString(),
     }]);
   };
@@ -206,7 +227,7 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
     if (localAudioTrack.current) {
       localAudioTrack.current.setEnabled(isMuted);
       setIsMuted(!isMuted);
-      toast(isMuted ? '🎙️ الميكروفون شغّال' : '🔇 تم كتم الميكروفون', 'info');
+      toast(isMuted ? 'الميكروفون مفعّل' : 'تم كتم الميكروفون', 'info');
     }
   };
 
@@ -233,8 +254,18 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
     if (myVote) return;
     setMyVote(targetId);
     socket.emit('cast_vote', { targetId }, (res) => {
-      if (res?.error) { toast(res.error, 'error'); setMyVote(null); }
-      else toast('تم تصويتك! ✅', 'success');
+      if (res?.error) {
+        toast(res.error, 'error');
+        setMyVote(null);
+      } else {
+        toast('تم تسجيل تصويتك', 'success');
+      }
+    });
+  };
+
+  const handleResetGame = () => {
+    socket.emit('reset_game', (res) => {
+      if (res?.error) toast(res.error, 'error');
     });
   };
 
@@ -250,7 +281,6 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
     socket.emit('leave_room', () => onLeave());
   };
 
-  // ── Get vote count per player ──
   const voteCount = {};
   Object.values(votes).forEach(vid => {
     voteCount[vid] = (voteCount[vid] || 0) + 1;
@@ -265,77 +295,69 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
   if (phase === 'ended' && gameResult) {
     const iWon = (gameResult.winner === 'citizens' && !isImpostor) ||
                   (gameResult.winner === 'impostors' && isImpostor);
+
     return (
       <div style={{
         minHeight: '100vh',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '20px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '24px 16px',
+        background: 'var(--bg-base)'
       }}>
-        <div style={{
-          textAlign: 'center',
-          animation: 'fadeInScale 0.5s ease',
-          maxWidth: '500px',
-          width: '100%',
-        }}>
-          {/* Result emoji */}
-          <div style={{ fontSize: '100px', marginBottom: '16px', lineHeight: 1 }}>
-            {iWon ? '🎉' : '😢'}
+        <div style={{ maxWidth: '440px', width: '100%', textAlign: 'center' }}>
+          <div style={{ marginBottom: '24px' }}>
+            <span className={`badge ${iWon ? 'badge-green' : 'badge-red'}`} style={{ padding: '6px 14px', fontSize: '13px' }}>
+              {iWon ? 'فوز بالجولة' : 'خسارة الجولة'}
+            </span>
+            <h1 style={{ fontSize: '32px', fontWeight: '800', marginTop: '12px', letterSpacing: '-0.5px' }}>
+              {gameResult.winner === 'citizens' ? 'فاز المواطنون' : 'فاز المتسللون'}
+            </h1>
           </div>
-          <h1 style={{
-            fontSize: '44px', fontWeight: '900',
-            background: iWon
-              ? 'linear-gradient(135deg, #4ade80, #22c55e)'
-              : 'linear-gradient(135deg, #f87171, #ef4444)',
-            backgroundClip: 'text', WebkitBackgroundClip: 'text',
-            WebkitTextFillColor: 'transparent',
-            marginBottom: '8px',
-          }}>
-            {iWon ? 'فزت! 🏆' : 'خسرت! 😅'}
-          </h1>
-          <p style={{ fontSize: '18px', color: 'var(--text-secondary)', marginBottom: '24px' }}>
-            {gameResult.winner === 'citizens' ? '🕵️ فاز المواطنون!' : '🎭 فاز المتسللون!'}
-          </p>
 
-          <div className="card" style={{ marginBottom: '20px', padding: '24px' }}>
-            <div style={{ marginBottom: '16px' }}>
-              <div style={{ fontSize: '13px', color: 'var(--text-dim)', marginBottom: '6px' }}>الكلمة كانت:</div>
-              <div style={{
-                fontSize: '32px', fontWeight: '900',
-                color: 'var(--primary-lighter)',
-              }}>
-                🎯 {gameResult.word}
+          <div className="card" style={{ marginBottom: '20px', textAlign: 'right' }}>
+            <div style={{ marginBottom: '16px', paddingBottom: '16px', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '4px' }}>الكلمة السرية</div>
+              <div style={{ fontSize: '24px', fontWeight: '800', color: 'var(--text-primary)' }}>
+                {gameResult.word}
               </div>
             </div>
 
-            <div style={{ marginBottom: '12px' }}>
-              <div style={{ fontSize: '13px', color: 'var(--text-dim)', marginBottom: '8px' }}>المتسلل/المتسللون:</div>
+            <div style={{ marginBottom: '16px' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginBottom: '8px' }}>المتسلل / المتسللون</div>
               {gameResult.impostors?.map((imp, i) => (
                 <div key={i} style={{
-                  display: 'flex', alignItems: 'center', gap: '10px',
-                  padding: '10px 14px',
-                  background: 'rgba(239,68,68,0.1)',
-                  border: '1px solid rgba(239,68,68,0.3)',
-                  borderRadius: 'var(--radius-md)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  padding: '8px 12px',
+                  background: 'var(--bg-subtle)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-sm)',
                   marginBottom: '6px',
                 }}>
-                  <div className="avatar avatar-sm" style={{ background: imp?.avatar_color || '#ef4444' }}>
+                  <div className="avatar avatar-sm">
                     {imp?.username?.[0]?.toUpperCase()}
                   </div>
-                  <span style={{ fontWeight: '700' }}>🎭 {imp?.username}</span>
+                  <span style={{ fontWeight: '700', fontSize: '13px' }}>{imp?.username}</span>
                 </div>
               ))}
             </div>
 
-            <div style={{ fontSize: '13px', color: 'var(--text-dim)' }}>
-              {gameResult.wasImpostor
-                ? '✅ تم الكشف عن المتسلل'
-                : '❌ لم يتم الكشف عن المتسلل'}
+            <div style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
+              {gameResult.wasImpostor ? 'تم كشف المتسلل بالتصويت' : 'لم يتمكن المواطنون من كشف المتسلل'}
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
-            <button className="btn btn-primary btn-lg" onClick={handleLeave}>
-              🏠 العودة للبيت
+          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+            {isHost && (
+              <button className="btn btn-primary" onClick={handleResetGame}>
+                <IconPlay size={14} />
+                <span>جولة جديدة</span>
+              </button>
+            )}
+            <button className="btn btn-secondary" onClick={handleLeave}>
+              العودة للرئيسية
             </button>
           </div>
         </div>
@@ -344,138 +366,124 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
   }
 
   // ──────────────────────────────────────────────
-  // MAIN GAME UI
+  // ACTIVE GAME PLAYING UI
   // ──────────────────────────────────────────────
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', maxHeight: '100vh', overflow: 'hidden' }}>
+    <div style={{
+      minHeight: '100vh',
+      display: 'flex',
+      flexDirection: 'column',
+      maxHeight: '100vh',
+      overflow: 'hidden',
+      background: 'var(--bg-base)'
+    }}>
       {/* Header */}
       <header style={{
         padding: '12px 20px',
         borderBottom: '1px solid var(--border)',
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        background: 'rgba(7, 26, 14, 0.9)',
-        backdropFilter: 'blur(20px)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        background: 'var(--bg-surface)',
         flexShrink: 0,
       }}>
-        {/* Role badge */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: '10px',
-        }}>
+        {/* Role Badge */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{
-            padding: '8px 16px',
-            borderRadius: 'var(--radius-full)',
-            background: isImpostor ? 'rgba(239,68,68,0.2)' : 'rgba(34,197,94,0.2)',
-            border: `1px solid ${isImpostor ? 'rgba(239,68,68,0.4)' : 'rgba(34,197,94,0.4)'}`,
-            display: 'flex', alignItems: 'center', gap: '8px',
+            padding: '6px 14px',
+            borderRadius: 'var(--radius-sm)',
+            background: isImpostor ? 'var(--danger-subtle)' : 'var(--accent-subtle)',
+            border: `1px solid ${isImpostor ? 'var(--danger-border)' : 'var(--accent-border)'}`,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
           }}>
-            <span style={{ fontSize: '18px' }}>{isImpostor ? '🎭' : '🕵️'}</span>
             <div>
               <div style={{
-                fontWeight: '800', fontSize: '14px',
-                color: isImpostor ? 'var(--impostor-light)' : 'var(--primary-lighter)',
+                fontWeight: '700',
+                fontSize: '13px',
+                color: isImpostor ? 'var(--danger)' : 'var(--accent)'
               }}>
-                {isImpostor ? 'أنت المتسلل!' : 'مواطن شريف'}
+                {isImpostor ? 'أنت المتسلل' : 'أنت مواطن'}
               </div>
               {!isImpostor && (
-                <div style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
-                  الكلمة: <span style={{ color: 'var(--primary-lighter)', fontWeight: '700' }}>
-                    {gameData.word}
-                  </span>
+                <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                  الكلمة: <strong style={{ color: 'var(--text-primary)' }}>{gameData.word}</strong>
                 </div>
               )}
               {isImpostor && (
-                <div style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
-                  اكتشف الكلمة دون أن تُكشف!
+                <div style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
+                  حاول تخمين الكلمة دون أن تُكشف
                 </div>
               )}
             </div>
           </div>
+
+          {/* Phase Badge */}
+          <span className={`badge ${phase === 'voting' ? 'badge-red' : ''}`}>
+            {phase === 'voting' ? 'مرحلة التصويت' : 'مرحلة النقاش'}
+          </span>
         </div>
 
-        {/* Phase indicator */}
-        <div style={{
-          padding: '8px 16px',
-          borderRadius: 'var(--radius-full)',
-          background: phase === 'voting' ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.1)',
-          border: `1px solid ${phase === 'voting' ? 'rgba(239,68,68,0.4)' : 'rgba(34,197,94,0.2)'}`,
-          fontWeight: '700', fontSize: '14px',
-          color: phase === 'voting' ? 'var(--impostor-light)' : 'var(--primary-lighter)',
-          display: 'flex', alignItems: 'center', gap: '6px',
-        }}>
-          {phase === 'voting' ? '🗳️ مرحلة التصويت' : '💬 مرحلة النقاش'}
-        </div>
-
-        {/* Voice + actions */}
+        {/* Action Controls */}
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          {voiceError ? (
-            <span style={{ fontSize: '12px', color: 'var(--text-dim)' }}>🔇 لا صوت</span>
-          ) : (
+          {AGORA_APP_ID && !voiceError && (
             <button
               className={`btn btn-sm ${isMuted ? 'btn-danger' : 'btn-secondary'}`}
               onClick={toggleMute}
-              style={{ minWidth: '90px' }}
             >
-              {isMuted ? '🔇 ميوت' : '🎙️ صوت'}
+              {isMuted ? <IconMicOff size={14} /> : <IconMic size={14} />}
+              <span>{isMuted ? 'مكتوم' : 'تحدث'}</span>
             </button>
           )}
+
           {isHost && phase === 'discussion' && (
-            <button className="btn btn-danger btn-sm" onClick={handleRequestVote}>
-              🗳️ تصويت
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={handleRequestVote}
+              title="بدء مرحلة التصويت"
+            >
+              <IconVote size={14} />
+              <span>بدء التصويت</span>
             </button>
           )}
-          <button className="btn btn-ghost btn-sm" onClick={handleLeave}>🚪</button>
+
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={handleLeave}
+            title="مغادرة اللعبة"
+          >
+            <IconLogout size={16} />
+          </button>
         </div>
       </header>
 
-      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 360px', overflow: 'hidden' }}>
-        {/* ── Left Panel ── */}
+      {/* Main Grid: Game on left, Chat on right */}
+      <div style={{ flex: 1, display: 'grid', gridTemplateColumns: '1fr 340px', overflow: 'hidden' }}>
+        {/* Left Panel */}
         <div style={{ overflowY: 'auto', padding: '20px' }}>
-          {/* Current turn banner */}
+          {/* Discussion Turn Banner */}
           {phase === 'discussion' && (
-            <div style={{
-              marginBottom: '20px', padding: '18px 24px',
-              background: isMyTurn
-                ? 'linear-gradient(135deg, rgba(34,197,94,0.2), rgba(22,163,74,0.1))'
-                : 'var(--bg-glass)',
-              border: `1px solid ${isMyTurn ? 'rgba(34,197,94,0.5)' : 'var(--border)'}`,
-              borderRadius: 'var(--radius-xl)',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              animation: 'fadeIn 0.3s ease',
-              boxShadow: isMyTurn ? 'var(--shadow-glow)' : 'none',
+            <div className="card" style={{
+              marginBottom: '20px',
+              padding: '16px 20px',
+              border: `1px solid ${isMyTurn ? 'var(--border-active)' : 'var(--border)'}`,
+              background: isMyTurn ? 'var(--bg-subtle)' : 'var(--bg-card)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '12px'
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                {isMyTurn ? (
-                  <>
-                    <div style={{ fontSize: '32px', animation: 'float 2s infinite' }}>🎙️</div>
-                    <div>
-                      <div style={{ fontWeight: '800', fontSize: '18px', color: 'var(--primary-lighter)' }}>
-                        دورك الآن!
-                      </div>
-                      <div style={{ fontSize: '13px', color: 'var(--text-dim)' }}>
-                        {askedByPlayer
-                          ? `${askedByPlayer.username} اختارك للإجابة`
-                          : 'اختر شخصاً تسأله'}
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div style={{ fontSize: '28px' }}>⏳</div>
-                    <div>
-                      <div style={{ fontWeight: '700', fontSize: '16px' }}>
-                        دور{' '}
-                        <span style={{ color: 'var(--primary-lighter)' }}>
-                          {currentPlayer?.username || 'اللاعب'}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: '13px', color: 'var(--text-dim)' }}>
-                        {askedByPlayer
-                          ? `${askedByPlayer.username} يسأله`
-                          : 'يختار من يسأل'}
-                      </div>
-                    </div>
-                  </>
-                )}
+              <div>
+                <div style={{ fontWeight: '700', fontSize: '15px' }}>
+                  {isMyTurn ? 'دورك الآن' : `دور: ${currentPlayer?.username || 'اللاعب'}`}
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginTop: '2px' }}>
+                  {isMyTurn
+                    ? (askedByPlayer ? `${askedByPlayer.username} اختارك للإجابة` : 'اضغط على اسأل شخصاً ثم اختر لاعباً من القائمة')
+                    : (askedByPlayer ? `${askedByPlayer.username} يوجه له السؤال` : 'يختار من يسأل')}
+                </div>
               </div>
 
               {isMyTurn && (
@@ -485,11 +493,11 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
                     onClick={() => setSelectingTarget(true)}
                     disabled={selectingTarget}
                   >
-                    {selectingTarget ? 'اختر لاعباً ↓' : '🫵 اسأل شخصاً'}
+                    {selectingTarget ? 'اختر لاعباً من القائمة أدناه' : 'اسأل شخصاً'}
                   </button>
                   {askedByPlayer && (
                     <button className="btn btn-secondary btn-sm" onClick={handleEndTurn}>
-                      ✅ انتهيت
+                      إنهاء الإجابة
                     </button>
                   )}
                 </div>
@@ -497,26 +505,38 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
             </div>
           )}
 
-          {/* Players list */}
-          <h3 style={{ fontWeight: '700', marginBottom: '14px', fontSize: '16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            👥 اللاعبون
+          {/* Voting Instructions Banner */}
+          {phase === 'voting' && (
+            <div className="card" style={{ marginBottom: '20px', padding: '16px 20px', borderColor: 'var(--danger-border)' }}>
+              <div style={{ fontWeight: '700', fontSize: '14px', color: 'var(--danger)' }}>
+                مرحلة التصويت ({Object.keys(votes).length} / {players.length} أصوات مسجلة)
+              </div>
+              <div style={{ fontSize: '12px', color: 'var(--text-dim)', marginTop: '3px' }}>
+                {myVote
+                  ? `صوّتت على: ${players.find(p => p.id === myVote)?.username}`
+                  : 'اضغط على بطاقة اللاعب الذي تعتقد أنه المتسلل'}
+              </div>
+            </div>
+          )}
+
+          {/* Players Grid Heading */}
+          <div style={{ marginBottom: '14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <h3 style={{ fontSize: '15px', fontWeight: '700' }}>
+              اللاعبون ({players.length})
+            </h3>
             {selectingTarget && (
-              <span style={{
-                fontSize: '13px', color: 'var(--primary-lighter)',
-                background: 'rgba(34,197,94,0.1)',
-                padding: '3px 10px', borderRadius: '20px',
-                border: '1px solid rgba(34,197,94,0.3)',
-                animation: 'blink 1s infinite',
-              }}>
-                اضغط على لاعب لتسأله
+              <span className="badge badge-green">
+                اضغط على لاعب لتوجيه السؤال له
               </span>
             )}
-          </h3>
+          </div>
 
+          {/* Players Cards Grid */}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-            gap: '10px', marginBottom: '20px',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+            gap: '10px',
+            marginBottom: '20px',
           }}>
             {players.map(p => {
               const isCurrentTurn = p.id === currentTurn;
@@ -534,56 +554,39 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
                       handleSelectTarget(p.id);
                     }
                   }}
+                  className="card"
                   style={{
-                    padding: '16px', borderRadius: 'var(--radius-lg)',
-                    border: `2px solid ${
-                      hasVotedFor ? 'var(--impostor)'
-                      : isCurrentTurn ? 'var(--primary-light)'
-                      : (selectingTarget && p.id !== user.id) ? 'rgba(34,197,94,0.4)'
+                    padding: '16px 14px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '10px',
+                    border: `1px solid ${
+                      hasVotedFor ? 'var(--danger)'
+                      : isCurrentTurn ? 'var(--text-primary)'
+                      : (selectingTarget && p.id !== user.id) ? 'var(--accent)'
                       : 'var(--border)'
                     }`,
                     background: hasVotedFor
-                      ? 'rgba(239,68,68,0.15)'
+                      ? 'var(--danger-subtle)'
                       : isCurrentTurn
-                      ? 'rgba(34,197,94,0.12)'
-                      : p.id === user.id
-                      ? 'rgba(34,197,94,0.06)'
-                      : 'var(--bg-glass)',
+                      ? 'var(--bg-subtle)'
+                      : 'var(--bg-card)',
                     cursor: (
                       (phase === 'voting' && p.id !== user.id && !myVote) ||
                       (phase === 'discussion' && selectingTarget && p.id !== user.id)
                     ) ? 'pointer' : 'default',
-                    transition: 'var(--transition)',
-                    position: 'relative',
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px',
-                    boxShadow: isSpeaking
-                      ? '0 0 20px rgba(34,197,94,0.5)'
-                      : isCurrentTurn
-                      ? 'var(--shadow-glow)'
-                      : 'none',
-                    transform: (selectingTarget && p.id !== user.id) ? 'scale(1.02)' : 'scale(1)',
+                    position: 'relative'
                   }}
                 >
-                  {/* Speaking indicator ring */}
-                  {isSpeaking && (
-                    <div style={{
-                      position: 'absolute', inset: '-3px',
-                      borderRadius: 'calc(var(--radius-lg) + 3px)',
-                      border: '2px solid var(--primary-light)',
-                      animation: 'pulse-glow 1s infinite',
-                      pointerEvents: 'none',
-                    }} />
-                  )}
-
-                  {/* Crown for host */}
+                  {/* Host Crown */}
                   {room.host_id === p.id && (
-                    <div style={{ position: 'absolute', top: '-8px', right: '50%', transform: 'translateX(50%)', fontSize: '16px' }}>👑</div>
+                    <div style={{ position: 'absolute', top: '8px', left: '8px', color: 'var(--text-secondary)' }}>
+                      <IconCrown size={14} />
+                    </div>
                   )}
 
-                  <div
-                    className="avatar avatar-lg"
-                    style={{ background: p.avatar_color || '#22c55e' }}
-                  >
+                  <div className="avatar">
                     {p.username[0]?.toUpperCase()}
                   </div>
 
@@ -591,182 +594,51 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
                     <div style={{ fontWeight: '700', fontSize: '13px' }}>
                       {p.username}
                       {p.id === user.id && (
-                        <span style={{ color: 'var(--primary-lighter)', fontSize: '11px', marginRight: '4px' }}>(أنت)</span>
+                        <span style={{ color: 'var(--text-dim)', fontSize: '11px', marginRight: '4px' }}>(أنت)</span>
                       )}
                     </div>
-                    {isCurrentTurn && (
-                      <span className="badge badge-green" style={{ marginTop: '4px', fontSize: '11px' }}>🎙️ دوره</span>
+                    {isCurrentTurn && phase === 'discussion' && (
+                      <span className="badge" style={{ marginTop: '4px', fontSize: '10px' }}>دوره الآن</span>
                     )}
                   </div>
 
-                  {/* Voice bars if speaking */}
-                  {isSpeaking && (
-                    <div className="voice-bars">
-                      {[...Array(5)].map((_, i) => (
-                        <div key={i} className="voice-bar" style={{ height: `${8 + Math.random() * 14}px` }} />
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Vote count */}
+                  {/* Vote count badge */}
                   {phase === 'voting' && pVoteCount > 0 && (
-                    <div style={{
-                      background: 'rgba(239,68,68,0.2)',
-                      border: '1px solid rgba(239,68,68,0.4)',
-                      borderRadius: 'var(--radius-full)',
-                      padding: '2px 10px',
-                      fontSize: '12px', fontWeight: '700',
-                      color: 'var(--impostor-light)',
-                    }}>
-                      {pVoteCount} صوت{pVoteCount > 1 ? '' : ''}
+                    <div className="badge badge-red" style={{ fontSize: '11px' }}>
+                      {pVoteCount} صوت
                     </div>
                   )}
                 </div>
               );
             })}
           </div>
-
-          {/* Voting status */}
-          {phase === 'voting' && (
-            <div style={{
-              padding: '16px 20px',
-              background: 'rgba(239,68,68,0.08)',
-              border: '1px solid rgba(239,68,68,0.3)',
-              borderRadius: 'var(--radius-lg)',
-              animation: 'fadeIn 0.3s ease',
-            }}>
-              <h4 style={{ fontWeight: '700', marginBottom: '10px', color: 'var(--impostor-light)' }}>
-                🗳️ حالة التصويت ({Object.keys(votes).length}/{players.length})
-              </h4>
-              {myVote ? (
-                <p style={{ fontSize: '14px', color: 'var(--text-secondary)' }}>
-                  ✅ صوّتت على:{' '}
-                  <span style={{ fontWeight: '700', color: 'var(--impostor-light)' }}>
-                    {players.find(p => p.id === myVote)?.username}
-                  </span>
-                </p>
-              ) : (
-                <p style={{ fontSize: '14px', color: 'var(--text-dim)', animation: 'blink 1.5s infinite' }}>
-                  👆 اضغط على اللاعب الذي تعتقد أنه المتسلل!
-                </p>
-              )}
-            </div>
-          )}
         </div>
 
-        {/* ── Right: Chat ── */}
-        <div style={{
-          borderRight: '1px solid var(--border)',
-          display: 'flex', flexDirection: 'column',
-          background: 'rgba(3, 15, 7, 0.6)',
-          overflow: 'hidden',
-        }}>
-          {/* Voice status bar */}
-          <div style={{
-            padding: '10px 16px',
-            borderBottom: '1px solid var(--border)',
-            background: agoraJoined
-              ? 'rgba(34,197,94,0.08)'
-              : voiceError === 'no_app_id'
-              ? 'rgba(239,68,68,0.08)'
-              : 'var(--bg-glass)',
-            display: 'flex', alignItems: 'center', gap: '8px',
-            fontSize: '13px',
-          }}>
-            {voiceError === 'no_app_id' ? (
-              <>
-                <span>🔇</span>
-                <span style={{ color: 'var(--text-dim)' }}>
-                  الصوت غير مفعّل - أضف Agora App ID
-                </span>
-              </>
-            ) : agoraJoined ? (
-              <>
-                <span style={{ color: 'var(--primary-lighter)' }}>🎙️</span>
-                <span style={{ color: 'var(--text-secondary)' }}>
-                  الصوت متصل • {Object.keys(remoteUsers).length + 1} في الغرفة
-                </span>
-                <button
-                  className="btn btn-sm"
-                  onClick={toggleMute}
-                  style={{
-                    marginRight: 'auto',
-                    background: isMuted ? 'rgba(239,68,68,0.2)' : 'rgba(34,197,94,0.2)',
-                    border: `1px solid ${isMuted ? 'rgba(239,68,68,0.4)' : 'rgba(34,197,94,0.4)'}`,
-                    color: isMuted ? 'var(--impostor-light)' : 'var(--primary-lighter)',
-                    padding: '4px 10px', borderRadius: '20px', cursor: 'pointer',
-                  }}
-                >
-                  {isMuted ? '🔇' : '🎙️'}
-                </button>
-              </>
-            ) : (
-              <>
-                <div className="spinner" style={{ width: '14px', height: '14px', borderWidth: '2px' }} />
-                <span style={{ color: 'var(--text-dim)' }}>جاري الاتصال بالصوت...</span>
-              </>
-            )}
+        {/* Right: Clean Minimalist Chat */}
+        <div className="chat-box" style={{ borderRadius: 0, borderTop: 'none', borderBottom: 'none', borderLeft: 'none' }}>
+          <div className="chat-header">
+            <span>دردشة اللعبة</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-dim)' }}>{chatMessages.length} رسالة</span>
           </div>
 
-          {/* Chat header */}
-          <div style={{
-            padding: '12px 16px',
-            borderBottom: '1px solid var(--border)',
-            fontWeight: '700', fontSize: '14px',
-            display: 'flex', alignItems: 'center', gap: '8px',
-          }}>
-            <span>💬</span> الدردشة
-          </div>
-
-          {/* Messages */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <div className="chat-messages">
             {chatMessages.length === 0 && (
-              <div style={{ textAlign: 'center', color: 'var(--text-dim)', fontSize: '13px', marginTop: '20px' }}>
-                ابدأ النقاش! 💬
+              <div style={{ textAlign: 'center', color: 'var(--text-dim)', fontSize: '12px', marginTop: '40px' }}>
+                ابدأ المحادثة والنقاش
               </div>
             )}
             {chatMessages.map(msg => (
-              <div key={msg.id} style={{ animation: 'slideInRight 0.2s ease' }}>
+              <div key={msg.id}>
                 {msg.type === 'system' ? (
-                  <div style={{
-                    textAlign: 'center', fontSize: '11px', color: 'var(--text-dim)',
-                    padding: '3px 10px', background: 'rgba(255,255,255,0.03)',
-                    borderRadius: '20px', margin: '2px auto', maxWidth: '90%',
-                  }}>
+                  <div className="chat-msg chat-msg-system">
                     {msg.message}
                   </div>
                 ) : (
-                  <div style={{
-                    display: 'flex',
-                    flexDirection: msg.userId === user.id ? 'row-reverse' : 'row',
-                    gap: '6px', alignItems: 'flex-end',
-                  }}>
-                    <div
-                      className="avatar avatar-sm"
-                      style={{ background: msg.avatarColor || '#22c55e', flexShrink: 0 }}
-                    >
-                      {msg.username?.[0]?.toUpperCase()}
-                    </div>
-                    <div style={{ maxWidth: '78%' }}>
-                      {msg.userId !== user.id && (
-                        <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginBottom: '2px', paddingRight: '4px' }}>
-                          {msg.username}
-                        </div>
-                      )}
-                      <div style={{
-                        padding: '8px 12px',
-                        borderRadius: msg.userId === user.id ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                        background: msg.type === 'quick'
-                          ? (msg.userId === user.id ? 'rgba(34,197,94,0.6)' : 'rgba(34,197,94,0.15)')
-                          : (msg.userId === user.id ? 'linear-gradient(135deg, #22c55e, #16a34a)' : 'rgba(255,255,255,0.07)'),
-                        border: msg.userId !== user.id ? '1px solid var(--border)' : 'none',
-                        fontSize: '13px', color: 'white',
-                        wordBreak: 'break-word',
-                      }}>
-                        {msg.type === 'quick' && <span style={{ fontSize: '10px', opacity: 0.7, marginLeft: '4px' }}>⚡</span>}
-                        {msg.message}
-                      </div>
-                    </div>
+                  <div className={`chat-msg ${msg.userId === user?.id ? 'chat-msg-mine' : 'chat-msg-other'}`}>
+                    {msg.userId !== user?.id && (
+                      <div className="chat-sender">{msg.username}</div>
+                    )}
+                    <div>{msg.message}</div>
                   </div>
                 )}
               </div>
@@ -774,40 +646,50 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
             <div ref={chatEndRef} />
           </div>
 
-          {/* Quick chat panel */}
+          {/* Quick Chat */}
           {showQuickChat && (
             <div style={{
-              padding: '10px 14px',
+              padding: '10px',
               borderTop: '1px solid var(--border)',
-              animation: 'fadeIn 0.2s ease',
-              background: 'rgba(0,0,0,0.2)',
+              background: 'var(--bg-subtle)',
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '6px'
             }}>
-              <div style={{ fontSize: '11px', color: 'var(--text-dim)', marginBottom: '8px', fontWeight: '600' }}>
-                ⚡ كويك شات
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                {QUICK_CHATS.map(qc => (
-                  <button key={qc} className="quick-chat-btn" onClick={() => handleSendChat(qc, 'quick')}
-                    style={{ fontSize: '12px', padding: '8px 10px' }}>
-                    {qc}
-                  </button>
-                ))}
-              </div>
+              {QUICK_CHATS.map(qc => (
+                <button
+                  key={qc}
+                  type="button"
+                  onClick={() => handleSendChat(qc, 'quick')}
+                  style={{
+                    padding: '6px 8px',
+                    fontSize: '11px',
+                    background: 'var(--bg-surface)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius-sm)',
+                    color: 'var(--text-primary)',
+                    cursor: 'pointer',
+                    textAlign: 'right',
+                    fontFamily: 'Cairo, sans-serif'
+                  }}
+                >
+                  {qc}
+                </button>
+              ))}
             </div>
           )}
 
-          {/* Input area */}
-          <div style={{
-            padding: '10px 14px',
-            borderTop: showQuickChat ? 'none' : '1px solid var(--border)',
-            display: 'flex', gap: '6px',
-          }}>
+          {/* Input Row */}
+          <div className="chat-input-row">
             <button
               className="btn btn-ghost btn-sm"
+              type="button"
               onClick={() => setShowQuickChat(!showQuickChat)}
-              style={{ minWidth: '36px', padding: '6px', fontSize: '16px' }}
-              title="كويك شات"
-            >⚡</button>
+              title="عبارات سريعة"
+              style={{ padding: '6px 10px', fontSize: '11px' }}
+            >
+              سريع
+            </button>
             <input
               className="input"
               style={{ flex: 1, padding: '8px 12px', fontSize: '13px' }}
@@ -818,10 +700,13 @@ export default function GameRoom({ gameData, room, onGameEnd, onLeave }) {
             />
             <button
               className="btn btn-primary btn-sm"
+              type="button"
               onClick={() => handleSendChat()}
               disabled={!chatInput.trim()}
-              style={{ minWidth: '36px', padding: '6px' }}
-            >✈️</button>
+              style={{ padding: '8px 12px' }}
+            >
+              <IconSend size={14} />
+            </button>
           </div>
         </div>
       </div>
