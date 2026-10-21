@@ -822,14 +822,7 @@ function resolveVotes(roomId, session, allPlayers) {
   }
 }
 
-  // Reset room after 30 seconds
-  setTimeout(() => {
-    db.prepare('UPDATE rooms SET status = ? WHERE id = ?').run('waiting', roomId);
-    db.prepare('DELETE FROM votes WHERE session_id = ?').run(session.id);
-    const roomData = getRoomData(roomId);
-    if (roomData) io.to(roomId).emit('room_reset', roomData);
-  }, 30000);
-}
+
 
 // Serve static client files if built
 const candidateDistDirs = [
