@@ -140,9 +140,9 @@ class PureStatement {
         };
       });
     }
-    if (/SELECT COUNT\(\*\) as count FROM room_players WHERE room_id = \?/i.test(sql)) {
+    if (/SELECT COUNT\(\*\).*FROM room_players WHERE room_id = \?/i.test(sql)) {
       const count = data.room_players.filter(rp => rp.room_id === params[0]).length;
-      return [{ count }];
+      return [{ count, c: count }];
     }
     if (/SELECT \* FROM room_players WHERE room_id = \? AND user_id = \?/i.test(sql)) {
       const rp = data.room_players.find(x => x.room_id === params[0] && x.user_id === params[1]);

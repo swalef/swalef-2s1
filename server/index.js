@@ -267,12 +267,16 @@ io.on('connection', (socket) => {
   // ---- JOIN ROOM BY CODE ----
   socket.on('join_room', ({ code }, callback) => {
     try {
-      const room = db.prepare('SELECT * FROM rooms WHERE code = ?').get(code?.toUpperCase());
-      if (!room) return callback({ error: 'كود الغرفة غير صحيح' });
-      if (room.status !== 'waiting') return callback({ error: 'اللعبة بدأت مسبقاً' });
+      const cleanCode = code ? String(code).trim().toUpperCase() : '';
+      if (!cleanCode) return callback?.({ error: 'يرجى إدخال كود الغرفة' });
 
-      const playerCount = db.prepare('SELECT COUNT(*) as c FROM room_players WHERE room_id = ?').get(room.id).c;
-      if (playerCount >= room.max_players) return callback({ error: 'الغرفة ممتلئة' });
+      const room = db.prepare('SELECT * FROM rooms WHERE code = ?').get(cleanCode);
+      if (!room) return callback?.({ error: 'كود الغرفة غير صحيح أو الغرفة غير موجودة' });
+      if (room.status !== 'waiting') return callback?.({ error: 'اللعبة بدأت مسبقاً في هذه الغرفة' });
+
+      const countRow = db.prepare('SELECT COUNT(*) as count FROM room_players WHERE room_id = ?').get(room.id);
+      const playerCount = countRow ? (countRow.count ?? countRow.c ?? 0) : 0;
+      if (playerCount >= room.max_players) return callback?.({ error: 'الغرفة ممتلئة بالكامل' });
 
       // Check if already in room
       const existing = db.prepare('SELECT * FROM room_players WHERE room_id = ? AND user_id = ?').get(room.id, socket.user.id);
@@ -284,15 +288,17 @@ io.on('connection', (socket) => {
       socket.currentRoom = room.id;
 
       const roomData = getRoomData(room.id);
-      callback({ success: true, room: roomData });
+      callback?.({ success: true, room: roomData });
       io.to(room.id).emit('room_updated', roomData);
       io.to(room.id).emit('player_joined', { username: socket.user.username });
 
       // Auto-start timer if 5+ players
-      checkAndStartWaitingTimer(room.id, roomData.players.length);
+      if (roomData && roomData.players) {
+        checkAndStartWaitingTimer(room.id, roomData.players.length);
+      }
     } catch (err) {
       console.error('Join room error:', err);
-      callback({ error: 'فشل الانضمام للغرفة' });
+      callback?.({ error: 'فشل الانضمام للغرفة: ' + (err.message || 'حاول مجدداً') });
     }
   });
 

@@ -127,8 +127,8 @@ export default function HomePage({ onJoinRoom }) {
           <div style={{
             width: '36px',
             height: '36px',
-            background: 'var(--text-primary)',
-            color: '#09090b',
+            background: 'var(--accent)',
+            color: '#ffffff',
             borderRadius: 'var(--radius-sm)',
             display: 'flex',
             alignItems: 'center',
@@ -309,7 +309,7 @@ export default function HomePage({ onJoinRoom }) {
                   style={{ cursor: 'pointer' }}
                 >
                   {categories.map(c => (
-                    <option key={c} value={c} style={{ background: '#18181b', color: '#fafafa' }}>{c}</option>
+                    <option key={c} value={c} style={{ background: '#ffffff', color: '#111827' }}>{c}</option>
                   ))}
                 </select>
               </div>
